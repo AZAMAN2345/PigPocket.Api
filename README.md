@@ -1,6 +1,12 @@
-# Pig Pocket API
+# Pig Pocket
 
-ASP.NET Core API for Pig Pocket, backed by MongoDB.
+Pig Pocket is maintained as a monorepo containing the ASP.NET Core API and the
+Expo/React Native mobile application.
+
+## Repository structure
+
+- `/` — ASP.NET Core API backed by MongoDB
+- `/PigPocket.Mobile` — Expo/React Native client
 
 ## Requirements
 
@@ -28,3 +34,5 @@ dotnet run
 ```
 
 The development HTTP profile listens on `http://localhost:5022`.
+
+See `PigPocket.Mobile/README.md` for mobile application setup and run commands.
