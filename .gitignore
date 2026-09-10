@@ -1,0 +1,25 @@
+# .NET build output
+bin/
+obj/
+
+# IDE and user-specific files
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+
+# Local configuration and secrets
+appsettings.Local.json
+appsettings.*.local.json
+.env
+.env.*
+!.env.example
+
+# Logs and test output
+*.log
+TestResults/
+coverage/
+
+# The React Native client is maintained separately.
+PigPocket.Mobile/

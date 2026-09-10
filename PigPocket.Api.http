@@ -1,0 +1,6 @@
+@PigPocket.Api_HostAddress = http://localhost:5022
+
+GET {{PigPocket.Api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
