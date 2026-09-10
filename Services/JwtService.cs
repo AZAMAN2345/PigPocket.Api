@@ -15,7 +15,7 @@ public class JwtService
         _configuration = configuration;
     }
 
-    public string GenerateToken(User user)
+    public string GenerateToken(User user, string sessionId)
     {
         var jwtKey = _configuration["Jwt:Key"];
         var jwtIssuer = _configuration["Jwt:Issuer"];
@@ -34,6 +34,7 @@ public class JwtService
 
         var claims = new List<Claim>
         {
+            new Claim("sid", sessionId),
             new Claim(
                 JwtRegisteredClaimNames.Sub,
                 user.Id.ToString()

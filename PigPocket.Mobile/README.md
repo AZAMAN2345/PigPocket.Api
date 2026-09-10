@@ -2,6 +2,18 @@
 
 React Native client scaffolded with Expo SDK 57 and TypeScript.
 
+## Fast local website
+
+Run `npm run web` to build and serve the production website at
+`http://localhost:8082`. This avoids Metro's request-time development bundling,
+compresses JavaScript and fonts, and caches fingerprinted assets in the browser.
+Keep the API running on port 5022.
+
+After changing code, stop the preview with Ctrl+C and run `npm run web` again.
+Use `npm run preview:web` to serve an existing build without rebuilding.
+Use `npm run web:dev` for hot reload during development (port 8081).
+The preview binds only to the local computer and is not a public hosting service.
+
 ## Start developing
 
 ```powershell

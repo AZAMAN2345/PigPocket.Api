@@ -14,10 +14,22 @@ using System.Text;
 BsonSerializer.RegisterSerializer(new GuidSerializer(GuidRepresentation.Standard));
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true).AddEnvironmentVariables();
 
 builder.Services.AddControllers();
 builder.Services.AddScoped<JwtService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddHttpClient<AuthEmailService>(client => client.Timeout = TimeSpan.FromSeconds(15));
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy
+    .WithOrigins(builder.Configuration.GetSection("Cors:Origins").Get<string[]>() ?? ["http://localhost:8081", "http://localhost:8082", "http://localhost:19006"])
+    .AllowAnyHeader().AllowAnyMethod()));
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = 429;
+    options.AddPolicy("auth", context => System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+        context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+        { PermitLimit = 30, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
+});
 builder.Services.AddScoped<KycService>();
 builder.Services.AddScoped<CategoryService>();
 builder.Services.AddScoped<MerchantService>();
@@ -55,15 +67,26 @@ builder.Services.AddSingleton(monoSettings);
 
 var jwtKey = builder.Configuration["Jwt:Key"];
 
-if (string.IsNullOrWhiteSpace(jwtKey))
+if (string.IsNullOrWhiteSpace(jwtKey) || Encoding.UTF8.GetByteCount(jwtKey) < 32 || jwtKey.StartsWith("replace-"))
 {
-    throw new InvalidOperationException("Jwt:Key is missing.");
+    throw new InvalidOperationException("Set Jwt:Key to a random secret of at least 32 bytes in local configuration or environment variables.");
 }
 
 builder.Services
     .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
+        options.Events = new JwtBearerEvents
+        {
+            OnTokenValidated = async context =>
+            {
+                var id = context.Principal?.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                var sid = context.Principal?.FindFirst("sid")?.Value;
+                if (!Guid.TryParse(id, out var userId) || sid is null ||
+                    !await context.HttpContext.RequestServices.GetRequiredService<AuthService>().IsSessionActive(userId, sid))
+                    context.Fail("Session has been revoked.");
+            }
+        };
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuer = true,
@@ -123,6 +146,7 @@ var app = builder.Build();
 
 using (var scope = app.Services.CreateScope())
 {
+    await scope.ServiceProvider.GetRequiredService<AuthService>().EnsureIndexesAsync();
     var categoryService = scope.ServiceProvider.GetRequiredService<CategoryService>();
     await categoryService.EnsureDefaultCategoriesAsync();
 
@@ -144,6 +168,17 @@ using (var scope = app.Services.CreateScope())
 }
 
 app.UseHttpsRedirection();
+app.UseCors();
+app.UseRateLimiter();
+app.Use(async (context, next) =>
+{
+    try { await next(); }
+    catch (AuthException ex)
+    {
+        context.Response.StatusCode = ex.Status;
+        await context.Response.WriteAsJsonAsync(new { message = ex.Message, code = ex.Code });
+    }
+});
 
 app.UseAuthentication();
 app.UseAuthorization();

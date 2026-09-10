@@ -2,6 +2,8 @@ export type AuthMode = 'login' | 'signup';
 
 export type AuthResponse = {
   token: string;
+  refreshToken: string;
+  expiresIn: number;
   userId: string;
   firstName: string;
   lastName: string;

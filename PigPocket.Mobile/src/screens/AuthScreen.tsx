@@ -1,5 +1,5 @@
-import { Ionicons } from '@expo/vector-icons';
-import { useMemo, useState } from 'react';
+import Ionicons from '@expo/vector-icons/Ionicons';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -12,6 +12,8 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import { EmailCodeScreen } from './EmailCodeScreen';
+import { DashboardScreen } from './DashboardScreen';
 import { AuthField } from '../components/AuthField';
 import { BrandLogo } from '../components/BrandLogo';
 import * as authService from '../services/authService';
@@ -40,14 +42,18 @@ function getApiErrorMessage(error: unknown) {
 export function AuthScreen() {
   const { width } = useWindowDimensions();
   const isDesktop = width >= 820;
+  const [step, setStep] = useState<'auth' | 'verify' | 'forgot' | 'reset'>('auth');
   const [mode, setMode] = useState<AuthMode>('login');
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [passwordVisible, setPasswordVisible] = useState(false);
+  const [confirmPasswordVisible, setConfirmPasswordVisible] = useState(false);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageIsSuccess, setMessageIsSuccess] = useState(false);
   const [authenticatedUser, setAuthenticatedUser] =
     useState<AuthResponse | null>(null);
 
@@ -70,12 +76,16 @@ export function AuthScreen() {
   function switchMode(nextMode: AuthMode) {
     setMode(nextMode);
     setMessage(null);
+    setMessageIsSuccess(false);
     setAuthenticatedUser(null);
     setPassword('');
+    setConfirmPassword('');
     setPasswordVisible(false);
+    setConfirmPasswordVisible(false);
   }
 
   async function submit() {
+    setMessageIsSuccess(false);
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedName = fullName.trim().replace(/\s+/g, ' ');
 
@@ -94,6 +104,11 @@ export function AuthScreen() {
       return;
     }
 
+    if (mode === 'signup' && password !== confirmPassword) {
+      setMessage('Passwords do not match.');
+      return;
+    }
+
     if (mode === 'signup' && !acceptedTerms) {
       setMessage('Agree to the Terms and Privacy Policy to continue.');
       return;
@@ -103,24 +118,63 @@ export function AuthScreen() {
     setMessage(null);
 
     try {
-      const response =
-        mode === 'login'
-          ? await authService.login({ email: normalizedEmail, password })
-          : await authService.register({
-              firstName: normalizedName.split(' ')[0],
-              lastName: normalizedName.split(' ').slice(1).join(' '),
-              email: normalizedEmail,
-              password,
-            });
-
-      setAuthenticatedUser(response);
-      setMessage(`Welcome${response.firstName ? `, ${response.firstName}` : ''}!`);
+      if (mode === 'login') {
+        setAuthenticatedUser(await authService.login({ email: normalizedEmail, password }));
+      } else {
+        await authService.register({ firstName: normalizedName.split(' ')[0], lastName: normalizedName.split(' ').slice(1).join(' '), email: normalizedEmail, password });
+        setEmail(normalizedEmail); setStep('verify');
+      }
+      setPassword('');
+      setConfirmPassword('');
     } catch (error) {
-      setMessage(getApiErrorMessage(error));
+      if (error instanceof ApiError && typeof error.body === 'object' && error.body !== null && 'code' in error.body && error.body.code === 'email_not_verified') {
+        try { await authService.sendCode(normalizedEmail); setStep('verify'); setPassword(''); }
+        catch (sendError) { setMessage(getApiErrorMessage(sendError)); }
+      } else setMessage(getApiErrorMessage(error));
     } finally {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    if (!authenticatedUser) return;
+    const timer = setTimeout(async () => {
+      try { setAuthenticatedUser(await authService.refreshSession(authenticatedUser.refreshToken)); }
+      catch { setAuthenticatedUser(null); setMessage('Your session expired. Please log in again.'); setStep('auth'); }
+    }, Math.max(1000, (authenticatedUser.expiresIn - 60) * 1000));
+    return () => clearTimeout(timer);
+  }, [authenticatedUser]);
+
+  if (authenticatedUser) return <DashboardScreen user={authenticatedUser} loading={loading} message={message} onLogout={async () => {
+      setLoading(true); setMessage(null);
+      try { await authService.logout(authenticatedUser.token); setAuthenticatedUser(null); setStep('auth'); switchMode('login'); }
+      catch (error) { if (error instanceof ApiError && error.status === 401) { setAuthenticatedUser(null); setStep('auth'); } else setMessage(getApiErrorMessage(error)); }
+      finally { setLoading(false); }
+    }} />;
+
+  if (step === 'verify' || step === 'reset') return <EmailCodeScreen key={`${step}:${email}`} email={email.trim().toLowerCase()} reset={step === 'reset'}
+    onBack={() => { setStep('auth'); switchMode(step === 'reset' ? 'login' : 'signup'); }}
+    onAuthenticated={user => { setAuthenticatedUser(user); setMessage(null); }}
+    onReset={() => {
+      setStep('auth');
+      switchMode('login');
+      setMessage('Password changed successfully.');
+      setMessageIsSuccess(true);
+    }} />;
+
+  if (step === 'forgot') return <View style={[styles.keyboardView, { justifyContent: 'center', padding: 28 }]}><View style={{ width: '100%', maxWidth: 440, alignSelf: 'center', gap: 24 }}>
+    <BrandLogo /><Text style={styles.heading}>Forgot password?</Text><Text style={styles.subtitle}>Enter your email and we?ll send a 6-digit reset code.</Text>
+    <AuthField label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" icon="mail-outline" keyboardType="email-address" autoComplete="email" />
+    {message && <Text accessibilityRole="alert" style={styles.errorMessageText}>{message}</Text>}
+    <Pressable style={styles.primaryButton} disabled={loading} onPress={async () => {
+      if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setMessage('Enter a valid email address.'); return; }
+      setLoading(true); setMessage(null);
+      try { await authService.sendCode(email.trim(), true); setStep('reset'); }
+      catch (error) { setMessage(getApiErrorMessage(error)); }
+      finally { setLoading(false); }
+    }}>{loading ? <ActivityIndicator color="white" /> : <Text style={styles.primaryButtonText}>Send reset code</Text>}</Pressable>
+    <Pressable disabled={loading} onPress={() => { setStep('auth'); setMessage(null); }}><Text style={styles.link}>? Back to log in</Text></Pressable>
+  </View></View>;
 
   return (
     <KeyboardAvoidingView
@@ -214,6 +268,23 @@ export function AuthScreen() {
               />
 
               {mode === 'signup' ? (
+                <AuthField
+                  label="Confirm password"
+                  value={confirmPassword}
+                  onChangeText={setConfirmPassword}
+                  placeholder="Enter your password again"
+                  icon="lock-closed-outline"
+                  secure
+                  passwordVisible={confirmPasswordVisible}
+                  onTogglePassword={() =>
+                    setConfirmPasswordVisible((visible) => !visible)
+                  }
+                  autoComplete="new-password"
+                  textContentType="newPassword"
+                />
+              ) : null}
+
+              {mode === 'signup' ? (
                 <>
                   <Text style={styles.passwordHint}>Use at least 8 characters</Text>
                   <Pressable
@@ -235,7 +306,7 @@ export function AuthScreen() {
                 </>
               ) : (
                 <Pressable
-                  onPress={() => setMessage('Password reset is not available yet.')}
+                  onPress={() => { setStep('forgot'); setMessage(null); setPassword(''); }}
                   style={styles.forgotButton}
                 >
                   <Text style={styles.link}>Forgot password?</Text>
@@ -247,18 +318,18 @@ export function AuthScreen() {
               <View
                 style={[
                   styles.message,
-                  authenticatedUser ? styles.successMessage : styles.errorMessage,
+                  messageIsSuccess ? styles.successMessage : styles.errorMessage,
                 ]}
               >
                 <Ionicons
-                  name={authenticatedUser ? 'checkmark-circle' : 'information-circle'}
+                  name={messageIsSuccess ? 'checkmark-circle' : 'information-circle'}
                   size={17}
-                  color={authenticatedUser ? '#087044' : '#9b3b31'}
+                  color={messageIsSuccess ? '#087044' : '#9b3b31'}
                 />
                 <Text
                   style={[
                     styles.messageText,
-                    authenticatedUser
+                    messageIsSuccess
                       ? styles.successMessageText
                       : styles.errorMessageText,
                   ]}
@@ -292,13 +363,20 @@ export function AuthScreen() {
               <View style={styles.divider} />
             </View>
 
+            {mode === 'signup' && <Pressable disabled={loading} onPress={async () => {
+              if (!/^\S+@\S+\.\S+$/.test(email.trim())) { setMessage('Enter your email first.'); return; }
+              setLoading(true); setMessage(null);
+              try { await authService.sendCode(email.trim()); setStep('verify'); }
+              catch (error) { setMessage(getApiErrorMessage(error)); }
+              finally { setLoading(false); }
+            }}><Text style={[styles.link, { textAlign: 'center', marginTop: 18 }]}>Already signed up? Verify your email</Text></Pressable>}
             <View style={styles.footerRow}>
               <Text style={styles.footerText}>
                 {mode === 'login'
                   ? 'New to Piggy Pockets? '
                   : 'Already have an account? '}
               </Text>
-              <Pressable onPress={() => switchMode(mode === 'login' ? 'signup' : 'login')}>
+              <Pressable disabled={loading} onPress={() => switchMode(mode === 'login' ? 'signup' : 'login')}>
                 <Text style={styles.link}>
                   {mode === 'login' ? 'Create account' : 'Log in'}
                 </Text>
